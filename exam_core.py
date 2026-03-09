@@ -1,6 +1,3 @@
-# Служебный модуль контрольной: ключ, генерация и проверка заданий через GPT.
-# Подключается из ноутбука по raw-URL с GitHub. Студентам код не показывать.
-
 import os
 import sys
 import json
@@ -9,7 +6,6 @@ import subprocess
 from datetime import datetime
 from openai import OpenAI
 
-# Ключ с backend (URL и токен можно переопределить через EXAM_BACKEND_KEY_URL и EXAM_BACKEND_TOKEN)
 BACKEND_KEY_URL = os.environ.get("EXAM_BACKEND_KEY_URL", "https://lan.avto-glass.kz/kmu.php")
 BACKEND_TOKEN = os.environ.get("EXAM_BACKEND_TOKEN", "1ebecc126f74122ebfae6427b3f6e565753b87edfdb7be2a4ba4ba34e303edb8")
 API_KEY = ""
