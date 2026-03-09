@@ -32,16 +32,29 @@ client = OpenAI(api_key=API_KEY)
 MODEL = "gpt-5-mini"
 
 
+def _to_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp(value, min_v, max_v):
+    return max(min_v, min(max_v, value))
+
+
 def generate_assignment(variant: int) -> str:
     prompt = f"""Сгенерируй ОДНО простое задание по Python для варианта {variant}.
 
 Уровень: базовый (для начинающих).
 Требования:
 - один понятный сценарий без лишней логики;
-- максимум 2 входные строки;
+- максимум 2 входные строки и 1 итоговый вывод;
 - решение ожидается в 10-18 строк;
 - обязательно: input/print, if/elif/else, сравнение строк, минимум один цикл, строки, список или кортеж;
-- НЕ использовать в условии сложные темы: словари, множества, файлы, regex, вложенные циклы глубже 1.
+- обязательно учесть edge-cases: регистр строк, пустой ввод (или пустой список), неизвестное значение/команда;
+- НЕ использовать сложные темы: словари, множества, файлы, regex, вложенные циклы глубже 1.
+- избегай длинных перечислений условий и сложных форматов команд в одном задании.
 
 Формат ответа задания (строго):
 1) Условие
@@ -49,6 +62,7 @@ def generate_assignment(variant: int) -> str:
 3) Формат вывода
 4) Пример
 
+В тексте вывода избегай неоднозначных фраз, формулировки должны быть естественными по-русски.
 Пиши только текст задания на русском, без решения и без пояснений преподавателю."""
     r = client.chat.completions.create(
         model=MODEL,
@@ -130,7 +144,12 @@ def evaluate_solution(assignment_text: str, code: str, variant: int) -> dict:
 4) correct_example — только если решение неполное/ошибочное, 10-25 строк.
 5) deductions: список объектов вида {{"reason":"...","points":N}}.
 6) criteria_scores: объект с ключами logic, requirements, io_format, quality.
-7) score должен быть согласован с rubric (в пределах 0..100).
+7) Сначала выстави criteria_scores, затем score вычисли как:
+   score = (logic + requirements + io_format + quality) - сумма штрафов deductions.
+   Потом ограничь score диапазоном 0..100.
+8) Не штрафуй за стиль и оформление, если логика верна и требования выполнены.
+9) Если решение корректно по сути, score должен быть не ниже 90.
+10) В errors_analysis пиши в формате: "Проблема -> эффект -> как исправить".
 
 Ответ СТРОГО в формате JSON (один объект, без markdown):
 {{
@@ -158,24 +177,44 @@ def evaluate_solution(assignment_text: str, code: str, variant: int) -> dict:
         text = text[text.find("{"): text.rfind("}") + 1]
     try:
         data = json.loads(text)
-        score = max(0, min(100, int(data.get("score", 0))))
+        raw_score = _to_int(data.get("score", 0), 0)
         criteria_scores = data.get("criteria_scores", {})
         if not isinstance(criteria_scores, dict):
             criteria_scores = {}
         deductions = data.get("deductions", [])
         if not isinstance(deductions, list):
             deductions = []
+        norm_criteria = {
+            "logic": _clamp(_to_int(criteria_scores.get("logic", 0), 0), 0, 40),
+            "requirements": _clamp(_to_int(criteria_scores.get("requirements", 0), 0), 0, 30),
+            "io_format": _clamp(_to_int(criteria_scores.get("io_format", 0), 0), 0, 15),
+            "quality": _clamp(_to_int(criteria_scores.get("quality", 0), 0), 0, 15),
+        }
+        criteria_total = sum(norm_criteria.values())
+        norm_deductions = []
+        deduction_total = 0
+        for item in deductions:
+            if isinstance(item, dict):
+                reason = str(item.get("reason", "Причина не указана")).strip() or "Причина не указана"
+                points = _clamp(_to_int(item.get("points", 0), 0), 0, 100)
+            else:
+                reason = str(item)
+                points = 0
+            norm_deductions.append({"reason": reason, "points": points})
+            deduction_total += points
+        computed_score = _clamp(criteria_total - deduction_total, 0, 100)
+        # Если модель прислала несогласованный score, берем вычисленный.
+        if abs(raw_score - computed_score) > 5:
+            score = computed_score
+        else:
+            score = _clamp(raw_score, 0, 100)
         return {
             "score": score,
             "feedback": data.get("feedback", ""),
             "errors_analysis": data.get("errors_analysis", ""),
-            "criteria_scores": {
-                "logic": int(criteria_scores.get("logic", 0) or 0),
-                "requirements": int(criteria_scores.get("requirements", 0) or 0),
-                "io_format": int(criteria_scores.get("io_format", 0) or 0),
-                "quality": int(criteria_scores.get("quality", 0) or 0),
-            },
-            "deductions": deductions,
+            "criteria_scores": norm_criteria,
+            "deductions": norm_deductions,
+            "score_formula": f"{criteria_total} - {deduction_total} = {score}",
             "correct_example": data.get("correct_example", ""),
         }
     except (json.JSONDecodeError, ValueError):
@@ -185,6 +224,7 @@ def evaluate_solution(assignment_text: str, code: str, variant: int) -> dict:
             "errors_analysis": f"Сырой ответ модели: {text[:1000]}",
             "criteria_scores": {"logic": 0, "requirements": 0, "io_format": 0, "quality": 0},
             "deductions": [],
+            "score_formula": "0 - 0 = 0",
             "correct_example": "",
         }
 
