@@ -3,6 +3,8 @@
 
 import os
 import json
+import sqlite3
+from datetime import datetime
 from openai import OpenAI
 
 # Ключ из Colab Secrets
@@ -82,3 +84,53 @@ def evaluate_solution(assignment_text: str, code: str, variant: int) -> dict:
         return {"score": score, "feedback": data.get("feedback", "")}
     except (json.JSONDecodeError, ValueError):
         return {"score": 0, "feedback": "Ошибка разбора ответа модели."}
+
+
+def save_to_sqlite(fio: str, group_name: str, credit: str, variant: int,
+                   assignment: str, code: str, score: int, feedback: str) -> bool:
+    """Сохраняет результат в SQLite на Google Drive (задание, решение, ФИО, группа, оценка, комментарий)."""
+    try:
+        from google.colab import drive
+        if not os.path.exists("/content/drive/MyDrive"):
+            drive.mount("/content/drive", force_remount=False)
+        db_path = "/content/drive/MyDrive/exam_results.db"
+    except Exception:
+        return False
+    if not os.path.exists("/content/drive/MyDrive"):
+        return False
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fio TEXT,
+                group_name TEXT,
+                credit TEXT,
+                variant INTEGER,
+                assignment TEXT,
+                code TEXT,
+                score INTEGER,
+                feedback TEXT,
+                created_at TEXT
+            )
+        """)
+        conn.execute(
+            """INSERT INTO results (fio, group_name, credit, variant, assignment, code, score, feedback, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                (fio or "")[:500],
+                (group_name or "")[:200],
+                (credit or "")[:200],
+                variant,
+                (assignment or "")[:15000],
+                (code or "")[:30000],
+                score,
+                (feedback or "")[:2000],
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
