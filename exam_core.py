@@ -33,22 +33,23 @@ MODEL = "gpt-5-mini"
 
 
 def generate_assignment(variant: int) -> str:
-    prompt = f"""Сгенерируй ОДНО задание по программированию на Python для варианта {variant}.
+    prompt = f"""Сгенерируй ОДНО простое задание по Python для варианта {variant}.
 
-Критерии качества:
-1. Один связный практический сценарий: пользователь вводит данные → программа обрабатывает → выводит результат. Без лишних условий.
-2. Обязательно должны быть использованы в решении (явно упомяни в формулировке, если нужно):
-   - ввод и вывод: input() и print();
-   - условные операторы: if/elif/else (или match/case);
-   - сравнение строк (==, !=, in, startswith и т.п.);
-   - минимум один цикл: for или while;
-   - работа со строками (срезы, методы, конкатенация);
-   - список или кортеж (создание, обращение по индексу, перебор).
-3. Задание однозначное: понятно, что вводить, в каком формате и что выводить. Укажи 1–2 примера ввода-вывода.
-4. Объём решения: 15–25 строк кода, без лишней сложности.
-5. Язык формулировки: русский.
+Уровень: базовый (для начинающих).
+Требования:
+- один понятный сценарий без лишней логики;
+- максимум 2 входные строки;
+- решение ожидается в 10-18 строк;
+- обязательно: input/print, if/elif/else, сравнение строк, минимум один цикл, строки, список или кортеж;
+- НЕ использовать в условии сложные темы: словари, множества, файлы, regex, вложенные циклы глубже 1.
 
-Ответ: только текст задания, без кода и без пояснений для преподавателя."""
+Формат ответа задания (строго):
+1) Условие
+2) Формат ввода
+3) Формат вывода
+4) Пример
+
+Пиши только текст задания на русском, без решения и без пояснений преподавателю."""
     r = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -114,16 +115,30 @@ def evaluate_solution(assignment_text: str, code: str, variant: int) -> dict:
 - stderr: {repr(run_result["stderr"][:1000])}
 - error: {run_result["error"]}
 
-Сделай:
-1) Оцени решение по заданию (учти и выполнение кода, и соответствие требованиям: input/print, условия, сравнение строк, циклы, строки, списки/кортежи).
-2) Разбор ошибок: если есть синтаксис, исключения или неверный вывод — объясни причину по пунктам на русском.
-3) Дай краткий пример правильного решения (10–25 строк кода), только если решение неверное или неполное.
+Оцени по фиксированной рубрике (100 баллов):
+- Логика и корректность результата: 40
+- Соответствие обязательным требованиям темы: 30
+- Ввод/вывод и формат результата: 15
+- Качество кода и устойчивость к типичным случаям: 15
+
+Требования к ответу:
+1) Обязательно дай конкретные причины снятия баллов (если есть).
+2) В feedback сделай 2 части:
+   - "Что сделано правильно: ..."
+   - "Почему не максимум: ..."
+3) errors_analysis — по пунктам, коротко и по делу.
+4) correct_example — только если решение неполное/ошибочное, 10-25 строк.
+5) deductions: список объектов вида {{"reason":"...","points":N}}.
+6) criteria_scores: объект с ключами logic, requirements, io_format, quality.
+7) score должен быть согласован с rubric (в пределах 0..100).
 
 Ответ СТРОГО в формате JSON (один объект, без markdown):
 {{
   "score": <0-100>,
   "feedback": "<общий комментарий на русском>",
   "errors_analysis": "<разбор ошибок по пунктам или «Ошибок нет»>",
+  "deductions": [{{"reason":"...","points": <число>}}],
+  "criteria_scores": {{"logic": <0-40>, "requirements": <0-30>, "io_format": <0-15>, "quality": <0-15>}},
   "correct_example": "<краткий пример правильного кода на Python или пустая строка, если решение засчитано>"
 }}
 """
@@ -134,24 +149,42 @@ def evaluate_solution(assignment_text: str, code: str, variant: int) -> dict:
     text = r.choices[0].message.content.strip()
     if text.startswith("```"):
         parts = text.split("```")
-        text = parts[1]
-        if text.startswith("json"):
-            text = text[4:]
-    text = text.lstrip()
+        if len(parts) > 1:
+            text = parts[1]
+            if text.startswith("json"):
+                text = text[4:]
+    text = text.strip()
+    if "{" in text and "}" in text:
+        text = text[text.find("{"): text.rfind("}") + 1]
     try:
         data = json.loads(text)
         score = max(0, min(100, int(data.get("score", 0))))
+        criteria_scores = data.get("criteria_scores", {})
+        if not isinstance(criteria_scores, dict):
+            criteria_scores = {}
+        deductions = data.get("deductions", [])
+        if not isinstance(deductions, list):
+            deductions = []
         return {
             "score": score,
             "feedback": data.get("feedback", ""),
             "errors_analysis": data.get("errors_analysis", ""),
+            "criteria_scores": {
+                "logic": int(criteria_scores.get("logic", 0) or 0),
+                "requirements": int(criteria_scores.get("requirements", 0) or 0),
+                "io_format": int(criteria_scores.get("io_format", 0) or 0),
+                "quality": int(criteria_scores.get("quality", 0) or 0),
+            },
+            "deductions": deductions,
             "correct_example": data.get("correct_example", ""),
         }
     except (json.JSONDecodeError, ValueError):
         return {
             "score": 0,
-            "feedback": "Ошибка разбора ответа модели.",
-            "errors_analysis": "",
+            "feedback": "Не удалось разобрать ответ модели. Проверьте формат JSON-ответа.",
+            "errors_analysis": f"Сырой ответ модели: {text[:1000]}",
+            "criteria_scores": {"logic": 0, "requirements": 0, "io_format": 0, "quality": 0},
+            "deductions": [],
             "correct_example": "",
         }
 
