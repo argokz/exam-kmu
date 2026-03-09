@@ -1,4 +1,6 @@
 secrets.json
+.env
+backend/.env
 *.pyc
 __pycache__/
 .ipynb_checkpoints/
