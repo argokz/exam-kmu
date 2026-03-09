@@ -52,7 +52,6 @@ def generate_assignment(variant: int) -> str:
     r = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
     )
     return r.choices[0].message.content.strip()
 
@@ -131,7 +130,6 @@ def evaluate_solution(assignment_text: str, code: str, variant: int) -> dict:
     r = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
     )
     text = r.choices[0].message.content.strip()
     if text.startswith("```"):
